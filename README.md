@@ -14,6 +14,7 @@ Instantiate and call `text()`:
 	echo $sd->text( "Safedown is *awesome*." );
 
 Result:
+
 	<p>Safedown is <em>awesome</em>.</p>
 
 ### Links
