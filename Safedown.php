@@ -11,6 +11,10 @@ This converts text to HTML using a restricted subset of [markdown][1]. No inline
 HTML is allowed at all. Links are supported but disabled by default. Designed 
 to be safe with unrestricted user input.
 
+The implementation is quite speedy, about twice as fast as Parsedown and many 
+times faster than a normal regex-based markdown converter. The difference is
+almost entirely due to algorithmic improvements, not optimization per se.
+
 [1]: https://daringfireball.net/projects/markdown/syntax
 
 Use:
@@ -86,10 +90,10 @@ class Safedown
 
 	This handler receives an array with anchor tag components:
 
-      * `url` - Actual URL to visit, or null for an inactive link
-      * `text` - Markdown to render for the link
-      * `title` - `title` attribute of anchor tag
-      * `click` - `onclick` attribute of anchor tag
+	  * `url` - Actual URL to visit, or null for an inactive link
+	  * `text` - Markdown to render for the link
+	  * `title` - `title` attribute of anchor tag
+	  * `click` - `onclick` attribute of anchor tag
 
 	You may return a boolean value or an updated array:
 
