@@ -11,6 +11,8 @@ This converts text to HTML using a restricted subset of [markdown][1]. No inline
 HTML is allowed at all. Links are supported but disabled by default. Designed 
 to be safe with unrestricted user input.
 
+[1]: https://daringfireball.net/projects/markdown/syntax
+
 Use:
 	$sd = new Safedown();
 	echo $sd->text( "Safedown is *awesome*." );
@@ -34,16 +36,16 @@ Block styles:
   * indented text - preformat
   * paragraphs - folded
   * "* " (or "- " or "+ ") - bullet
-  * TODO: code styling
+  * TODO: `code` styling
   * TODO: headers
 
-[1]: https://daringfireball.net/projects/markdown/syntax
 
 ================================================================================
 */
 
 class Safedown
 {
+	// Block type constants
 	const B_NONE = 0;
 	const B_EMPTY = 1;
 	const B_PRE = 2;
@@ -54,13 +56,49 @@ class Safedown
 	const B_HEADER = 6;
 	const B_EOF = 7;
 
+	// callable filter for URLs
 	protected $filterLinks;
-	protected $filterHashTags;		// TODO: "#tag" in text
-	protected $filterNameTags;		// TODO: "@tag" in text
+
+	// TODO: callable filter for #hashtags
+	protected $filterHashTags;
+
+	// TODO: callable filter for @nametags
+	protected $filterNameTags;
 
 	/*
 	=====================
 	__construct
+
+	Constructs a new Safedown parser. You may if desired pass in some options
+	to change the way the text is converted.
+
+	  * filterLinks - a `callable` to handle links (see below) 
+
+	Unknown options will be silently ignored.
+
+	### Filters
+
+	The various filter options should resolve to functions that accept a value
+	containing the item to be filtered and return a value indicating how to
+	handle it.
+
+	#### filterLinks
+
+	This handler receives an array with anchor tag components:
+
+      * `url` - Actual URL to visit, or null for an inactive link
+      * `text` - Markdown to render for the link
+      * `title` - `title` attribute of anchor tag
+      * `click` - `onclick` attribute of anchor tag
+
+	You may return a boolean value or an updated array:
+
+	  * `true` - allow the link to be formed into an anchor tag
+	  * `false` - deactivate the link, mangling it as usual
+	  * array or object - form an anchor tag with these values
+
+	@param array|stdclass $options Options for this parser instance
+
 	=====================
 	*/
 	public function __construct( $options = null )
@@ -77,26 +115,40 @@ class Safedown
 		}
 	}
 
+	// Identify **bold** or __bold__ text
 	protected static $re_bold = [
 		 "*" => "/[*][*]((?:\\\\[*]|[^*]|[*][^*]*[*])+?)[*][*](?![*])/A"
 		,"_" => "/[_][_]((?:\\\\[_]|[^_]|[_][^_]*[_])+?)[_][_](?![_])/A"
 	];
+	// Identify *italic* or _italic_ text
 	protected static $re_em = [
 		 "*" => "/[*]((?:\\\\[*]|[^*]|[*][*][^*]*[*][*])+?)[*](?![*])/A"
 		,"_" => "/[_]((?:\\\\[_]|[^_]|[_][_][^_]*[_][_])+?)[_](?![_])/A"
 	];
+	// Identify something that looks like an entity: &copy; &#x2001; &#32;
 	protected static $re_entity = 
 		"/&(?:[a-zA-Z][a-zA-Z0-9]+|#[0-9]+|#[xX][0-9a-fA-F]+);/A";
+	// Identify an HTTP URL in plain text, e.g. http://google.com
 	protected static $re_http = 
 		"/(?<=\\W)https?:([^?# \t]+?(?:[?][^# \t]*?)?(?:#[^ \t]*?)?)(?=\\.?[ \t]|\\.?$)/A";
+	// Identify an FTP URL in plain text, e.g. http://google.com
 	protected static $re_ftp = 
 		"/(?<=\\W)ftp?:([^?# \t]+(?:[?][^# \t]*)?(?:#[^ \t]*)?)(?=\\.?[ \t]|\\.?$)/A";
+	// Identify a markdown [link](http://daringfireball.net/markdown).
 	protected static $re_link = 
 		"/\[([^\\]\\[]+)\](?:\(([^()]+)(?:[ \t]+\"([^\"]*)\")?\)|\[([a-zA-Z0-9.,_]*)\])/A";
 
 	/*
 	=====================
 	MangleLink
+
+	Alters a URL to be invalid, while retaining enough information for a human
+	who really, really wants it to reconstruct it.
+
+	For example, alters "http://google.com" to "hxxp //google.com".
+
+	@param string $link URL to mangle
+	@return string Mangled URL
 	=====================
 	*/
 	protected function MangleLink( $link )
@@ -112,15 +164,33 @@ class Safedown
 	/*
 	=====================
 	HandleLink
+
+	Given a link (as an array of components), render it to HTML according to 
+	the options set for this parser. This boils down to either deactivating it
+	via MangleLink() or passing it through the user-provided `filterLinks` 
+	handler and then either drawing plain text or rendering it into an anchor 
+	tag.
+
+	@param array $link Link components - "url", "text", "title" and/or "click"
+	@return string Rendered HTML for the link
 	=====================
 	*/
 	protected function HandleLink( $link )
 	{
 		if (is_string( $link )) {
 			$link = [
-				"text" => $link
+				 "text" => $link
 				,"url" => $link
 			];
+		}
+		if (array_key_exists( "click", $link)) {
+			$link["click"] = null;
+		}
+		if (array_key_exists( "title", $link)) {
+			$link["title"] = null;
+		}
+		if (array_key_exists( "text", $link)) {
+			$link["text"] = $link["url"];
 		}
 		$got = false;
 		$f = $this->filterLinks;
@@ -168,6 +238,17 @@ class Safedown
 	/*
 	=====================
 	HandleInlines
+
+	Render markdown text within a block into HTML. The Markdown spec calls 
+	these "span elements".
+
+	The overall approach is to scan the text from beginning to end, looking for 
+	characters that might begin a markdown construct. When such a character is 
+	found, the surrounding text is inspected to see whether it is in fact 
+	markdown or normal text, and handled appropriately.
+
+	@param string $text Markdown to process
+	@return string Fully rendered HTML
 	=====================
 	*/
 	protected function HandleInlines( $text )
@@ -285,6 +366,21 @@ class Safedown
 	/*
 	=====================
 	ClassifyLine
+
+	Determines what kind of markdown block a line represents. You supply a 
+	string and the offset of the beginning of the line within that string, and
+	this function figures out whether it's a normal paragraph, empty line, 
+	blockquote, etc.
+
+	Since markdown allows blocks to be nested, this function might actually be 
+	called multiple times on a single line, with the position advancing through
+	levels of indent, bullet and blockquote.
+
+	@param string $text String containing the line of interest
+	@param int $pos Position of the start of the line within $text. On return,
+	       this may be updated to the position of the character after a block
+	       specifier (bullet, blockquote, or indent) 
+	@return int Line type (from `B_*` class constants)
 	=====================
 	*/
 	protected function ClassifyLine( $text, &$pos )
@@ -340,6 +436,21 @@ class Safedown
 	/*
 	=====================
 	HandleBlock
+
+	Renders a block of markdown into HTML. This is a recursive function, since
+	markdown allows unlimited nesting of some block types, e.g. blockquotes.
+
+	For speed, the source text of the block is not sliced and diced when 
+	preparing to render nested blocks. Instead, the "block" is represented as 
+	an array of string fragment positions within a single larger string. This
+	makes it easy to break out a subgroup of lines, strip some characters off 
+	the beginning of each line (without string operations) and reprocess that 
+	as a block.
+
+	@param array $lines 2D array of line information (integers): 
+	             [ [ offset, length ], [ offset, length ], ... ]
+	@param string $file String containing text for all the lines
+	@return string Rendered HTML for the block 
 	=====================
 	*/
 	protected function HandleBlock( $lines, $file )
@@ -477,6 +588,12 @@ class Safedown
 	/*
 	=====================
 	ParseFile
+
+	Does an initial breakdown of text into lines and renders the entire string
+	from markdown to HTML.
+
+	@param string $text Markdown source data
+	@return string HTML suitable for display
 	=====================
 	*/
 	protected function ParseFile( $text )
@@ -504,6 +621,11 @@ class Safedown
 	/*
 	=====================
 	text
+
+	Converts markdown source to HTML output.
+
+	@param string $text Markdown source data
+	@return string HTML suitable for display
 	=====================
 	*/
 	public function text( $text )
